@@ -1,0 +1,12 @@
+[package]
+name = "mahantongo"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+
+[dependencies]
+serenity = { version="0.11", default-features = false, features = [ "builder", "client", "gateway", "rustls_backend", "http", "utils", "model", "unstable_discord_api"] }
+tokio = { version = "1.21.2", features = ["macros", "rt-multi-thread"] }
+tokio-postgres = "0.7.7"
