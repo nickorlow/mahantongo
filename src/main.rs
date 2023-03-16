@@ -10,7 +10,9 @@ use serenity::model::id::ChannelId;
 use serenity::http::Http;
 use serenity::Error;
 use std::sync::Arc;
-use serenity::model::interactions::application_command::{ApplicationCommand, ApplicationCommandOptionType, ApplicationCommandInteraction, ApplicationCommandInteractionDataOptionValue};
+use serenity::model::application::command::{Command, CommandOptionType};
+use serenity::model::application::interaction::application_command::CommandDataOptionValue;
+use serenity::model::application::interaction::application_command::ApplicationCommandInteraction;
 use serenity::model::application::interaction::{Interaction, InteractionResponseType};
 
 struct Bot;
@@ -68,9 +70,9 @@ pub async fn create_board(command: &ApplicationCommandInteraction) -> String {
         .as_ref()
         .expect("Expected Integer value");
 
-    if let  ApplicationCommandInteractionDataOptionValue::Channel(channel) = channel_dov {
-        if let  ApplicationCommandInteractionDataOptionValue::String(emoji) = emoji_dov {
-            if let  ApplicationCommandInteractionDataOptionValue::Integer(threshold)  = threshold_dov { 
+    if let  CommandDataOptionValue::Channel(channel) = channel_dov {
+        if let  CommandDataOptionValue::String(emoji) = emoji_dov {
+            if let  CommandDataOptionValue::Integer(threshold)  = threshold_dov { 
 
                 let guild_id_int: i64 = *guild_id.as_u64() as i64;
                 let channel_id_int: i64 = *channel.id.as_u64() as i64;
@@ -202,8 +204,7 @@ impl EventHandler for Bot {
 
     async fn ready(&self, ctx: Context, ready: Ready) {
         println!("{} is connected!", ready.user.name);
-
-        let commands = ApplicationCommand::set_global_application_commands(&ctx.http, |commands| {
+        Command::set_global_application_commands(&ctx.http, |commands| {
             commands.create_application_command(|command| 
 		{ 
 			command.name("createboard")
@@ -213,20 +214,20 @@ impl EventHandler for Bot {
 							      .description("The channel to post messages to")
 							      .required(true)
                                   .channel_types(&[ChannelType::Text,])
-							      .kind(ApplicationCommandOptionType::Channel)
+							      .kind(CommandOptionType::Channel)
 						})
                     .create_option(|option| {
 							option.name("emoji")
 							      .description("The emoji that people react with to get it on the board")
 							      .required(true)
-							      .kind(ApplicationCommandOptionType::String)
+							      .kind(CommandOptionType::String)
 						})
                     .create_option(|option| {
 							option.name("threshold")
 							      .description("The number of reactions required to make it onto the board")
 							      .required(true)
                                   .min_int_value(1)
-							      .kind(ApplicationCommandOptionType::Integer)
+							      .kind(CommandOptionType::Integer)
 						})
 
 		})
