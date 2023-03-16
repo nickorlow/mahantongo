@@ -1,6 +1,6 @@
 use std::borrow::Borrow;
 use std::env;
-
+use tokio_postgres::{NoTls};
 use serenity::async_trait;
 use serenity::model::prelude::MessageReaction;
 use serenity::prelude::*;
@@ -19,7 +19,7 @@ struct Bot;
 async fn main() {
     let token = env::var("DISCORD_TOKEN").expect("token");
     let intents = GatewayIntents::non_privileged() | GatewayIntents::MESSAGE_CONTENT;
-    let mut client = Client::builder(token, intents)
+    let mut client = serenity::Client::builder(token, intents)
         .event_handler(Bot)
         .await
         .expect("Error creating client");
@@ -29,7 +29,24 @@ async fn main() {
     }
 }
 
-pub fn create_board(command: &ApplicationCommandInteraction) -> String {
+// TODO: ths is definitely not the proper way to handle connections
+pub async fn connect_to_db() -> (tokio_postgres::Client) {
+    let db_uri_env =  env::var("DB_URI").expect("Expected Database URI");
+    let db_uri =  db_uri_env.as_str();
+
+    let (client, connection) = tokio_postgres::connect(db_uri, NoTls).await.unwrap();
+    tokio::spawn(async move {
+        if let Err(e) = connection.await {
+            eprintln!("connection error: {}", e);
+        }
+    });
+    
+    return client;
+}
+
+pub async fn create_board(command: &ApplicationCommandInteraction) -> String {
+    let client = connect_to_db().await;
+
     let guild_id = command.guild_id.unwrap();
     let opts =  command.data.options.clone();
 
@@ -53,12 +70,22 @@ pub fn create_board(command: &ApplicationCommandInteraction) -> String {
 
     if let  ApplicationCommandInteractionDataOptionValue::Channel(channel) = channel_dov {
         if let  ApplicationCommandInteractionDataOptionValue::String(emoji) = emoji_dov {
-            if let  ApplicationCommandInteractionDataOptionValue::Integer(threshold)  = threshold_dov {
+            if let  ApplicationCommandInteractionDataOptionValue::Integer(threshold)  = threshold_dov { 
 
-                let channel_id: String = channel.id.to_string();
-            
-                return format!("Created! I will now post with more than {} reactions with the {} emoji, I will post it on <#{}>", threshold, emoji, channel_id);
+                let guild_id_int: i64 = *guild_id.as_u64() as i64;
+                let channel_id_int: i64 = *channel.id.as_u64() as i64;
+                let channel_id_str: String = channel.id.to_string();
+                
+                let result = client.execute(
+                    "INSERT INTO boards (emoji, threshold, guild_id, channel_id) VALUES ($1, $2, $3, $4);",
+                    &[emoji, threshold, &guild_id_int, &channel_id_int],
+                ).await;
 
+                if(result.is_err()) {
+                    return String::from("Error creating board!");
+                }
+
+                return format!("Created! I will now post with more than {} reactions with the {} emoji, I will post it on <#{}>", threshold, emoji, channel_id_str);
             }
         }
     }
@@ -66,43 +93,112 @@ pub fn create_board(command: &ApplicationCommandInteraction) -> String {
     return "Error!".to_string();
 }
 
+async fn handle_board_change(ctx: Context, reaction: Reaction, remove: bool) {
+    let client = connect_to_db().await;
+
+    let emoji_str: String =  reaction.emoji.to_string();
+    let emoji: &str = emoji_str.as_str();
+    let guild_id_int: i64 = *reaction.guild_id.unwrap().as_u64() as i64;
+
+    let rows = client
+        .query("SELECT id, threshold, channel_id FROM boards WHERE guild_id = $1 AND emoji = $2;", &[ &guild_id_int, &emoji])
+        .await.unwrap();
+
+    if(rows.len() == 0) {
+        return;
+    }
+
+    // And then check that we got back the same string we sent over.
+    let board_id: i64 = rows[0].get(0);
+    let threshold: u64 = rows[0].get::<usize, i64>(1) as u64;
+    let channel_id_num: u64 = rows[0].get::<usize, i64>(2) as u64;
+
+    println!("{}, {}", threshold, channel_id_num);
+
+    let channel_id: ChannelId = ChannelId(channel_id_num);
+    let message: Message = ctx.http.get_message(channel_id_num, *reaction.message_id.as_u64()).await.unwrap();
+    let mut do_i_remove = true;
+
+    for reaction in &message.reactions {
+        let http_ctx: Arc<Http> = ctx.borrow().clone().http;
+        println!("{},{}",reaction.reaction_type, reaction.count);
+
+        if(reaction.reaction_type.unicode_eq(emoji) && reaction.count >= threshold) {
+            do_i_remove = false;
+            let message_id_int: i64 = *message.id.as_u64() as i64;
+
+            let mapping = client
+            .query("SELECT board_message_id FROM message_mapping WHERE message_id = $1 AND board_id = $2;", &[ &message_id_int, &board_id])
+            .await.unwrap();
+
+            if(mapping.len() == 0) {
+                let mut username =  message.author.tag();
+
+                let nickname = message.author_nick(&http_ctx).await;
+                if(!nickname.is_none()) {
+                    username = format!("{} ({})", nickname.unwrap(), message.author.tag());
+                }
+
+                let message = format!("**Made the board:** \n{}\n\n---\n**From:** {}", message.content, username);
+               
+                let result_msg: Result<Message, serenity::Error> = channel_id.send_message(&http_ctx, |m| {
+                    m.content(message)
+                }).await;
+
+                if(result_msg.is_err()) {
+                    println!("Error sending board message");
+                    return;
+                }
+
+                let board_message = result_msg.unwrap();
+                let board_message_id_int: i64 = *board_message.id.as_u64() as i64;
+
+                
+                let result_db = client.execute(
+                    "INSERT INTO message_mapping (message_id, board_message_id, board_id) VALUES ($1, $2, $3);",
+                    &[&message_id_int, &board_message_id_int, &board_id],
+                ).await;
+
+                if(result_db.is_err()) {
+                    board_message.delete(http_ctx);
+                    println!("Error storing in database!");
+                    return;
+                }
+            }
+
+            return;
+        }
+    }
+
+    if(do_i_remove && remove) {
+        let message_id_int: i64 = *message.id.as_u64() as i64;
+
+        let mapping = client
+        .query("SELECT board_message_id FROM message_mapping WHERE message_id = $1 AND board_id = $2;", &[ &message_id_int, &board_id])
+        .await.unwrap();
+
+        let board_message_id: u64 = mapping[0].get::<usize, i64>(0) as u64;
+
+        let board_message: Message = ctx.http.get_message(channel_id_num, board_message_id).await.unwrap();
+        board_message.delete(ctx.http).await.unwrap();
+
+        let result_db = client.execute(
+           "DELETE FROM message_mapping WHERE message_id = $1 AND board_id = $2;",
+           &[ &message_id_int, &board_id],
+        ).await;
+    }
+}
+
 #[async_trait]
 impl EventHandler for Bot {
 
     async fn reaction_add(&self, ctx: Context, reaction: Reaction) {
-        // should pull from database
-        let threshold: u64 = 1;
-        let emoji: &str =  "😊";
-        let channel_id_num: u64 = 862894859571298306;
-
-        if(!reaction.emoji.unicode_eq(emoji)) { 
-            return;
-        }
-
-        let channel_id: ChannelId = ChannelId(channel_id_num);
-        let message: Message = ctx.http.get_message(channel_id_num, *reaction.message_id.as_u64()).await.unwrap();
-        
-        for reaction in message.reactions {
-            let http_ctx: Arc<Http> = ctx.borrow().clone().http;
-            println!("{},{}",reaction.reaction_type, reaction.count);
-
-            if(reaction.reaction_type.unicode_eq(emoji) && reaction.count >= threshold) {
-                let result: Result<Message, Error> = channel_id.send_message(http_ctx, |m| {
-                    m.content("Made the board: \n" )
-                }).await;
-
-                if(result.is_err()) {
-                    println!("Error sending board message");
-                }
-
-                break;
-            }
-        }
+        handle_board_change(ctx, reaction, false).await;
     }
 
-    // async fn reaction_remove(&self, ctx: Context, reaction: Reaction) {
-    //     
-    // }
+    async fn reaction_remove(&self, ctx: Context, reaction: Reaction) {
+        handle_board_change(ctx, reaction, true).await;
+    }
 
     async fn ready(&self, ctx: Context, ready: Ready) {
         println!("{} is connected!", ready.user.name);
@@ -140,7 +236,7 @@ impl EventHandler for Bot {
     async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
         if let Interaction::ApplicationCommand(command) = interaction {
             let response_content = match command.data.name.as_str() {
-                "createboard" => create_board(&command),
+                "createboard" => create_board(&command).await,
                 command => "Error".to_owned(),
             };
 
