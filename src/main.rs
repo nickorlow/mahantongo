@@ -2,13 +2,11 @@ use std::borrow::Borrow;
 use std::env;
 use tokio_postgres::{NoTls};
 use serenity::async_trait;
-use serenity::model::prelude::MessageReaction;
 use serenity::prelude::*;
 use serenity::model::gateway::Ready;
-use serenity::model::channel::{Message, ChannelType, Reaction, ReactionType};
+use serenity::model::channel::{Message, ChannelType, Reaction};
 use serenity::model::id::ChannelId;
 use serenity::http::Http;
-use serenity::Error;
 use std::sync::Arc;
 use serenity::model::application::command::{Command, CommandOptionType};
 use serenity::model::application::interaction::application_command::CommandDataOptionValue;
@@ -32,7 +30,7 @@ async fn main() {
 }
 
 // TODO: ths is definitely not the proper way to handle connections
-pub async fn connect_to_db() -> (tokio_postgres::Client) {
+pub async fn connect_to_db() -> tokio_postgres::Client {
     let db_uri_env =  env::var("DB_URI").expect("Expected Database URI");
     let db_uri =  db_uri_env.as_str();
 
@@ -83,7 +81,7 @@ pub async fn create_board(command: &ApplicationCommandInteraction) -> String {
                     &[emoji, threshold, &guild_id_int, &channel_id_int],
                 ).await;
 
-                if(result.is_err()) {
+                if result.is_err()  {
                     return String::from("Error creating board!");
                 }
 
@@ -93,6 +91,95 @@ pub async fn create_board(command: &ApplicationCommandInteraction) -> String {
     }
 
     return "Error!".to_string();
+}
+
+async fn add_to_board(message: Message, channel_id: ChannelId, board_id: i64, client: tokio_postgres::Client, http_ctx: Arc<serenity::http::Http>) {
+    let message_id_int: i64 = *message.id.as_u64() as i64;
+
+    let mapping = client
+        .query("SELECT board_message_id FROM message_mapping WHERE message_id = $1 AND board_id = $2;", &[ &message_id_int, &board_id])
+        .await.unwrap();
+
+    if mapping.len() == 0  {
+        let mut username =  message.author.tag();
+
+        let nickname = message.author_nick(&http_ctx).await;
+        if !nickname.is_none()  {
+            username = format!("{} ({})", nickname.unwrap(), message.author.tag());
+        }
+
+        let message = format!("**Made the board:** \n{}\n\n---\n**From:** {}", message.content, username);
+       
+        let result_msg: Result<Message, serenity::Error> = channel_id.send_message(&http_ctx, |m| {
+            m.content(message)
+        }).await;
+
+        if result_msg.is_err() {
+            println!("Error sending board message");
+            return;
+        }
+
+        let board_message = result_msg.unwrap();
+        let board_message_id_int: i64 = *board_message.id.as_u64() as i64;
+
+        
+        let result_db = client.execute(
+            "INSERT INTO message_mapping (message_id, board_message_id, board_id) VALUES ($1, $2, $3);",
+            &[&message_id_int, &board_message_id_int, &board_id],
+        ).await;
+
+        if result_db.is_err()  {
+            eprintln!("Error: Storing mapping in database!");
+
+            let delete_result = board_message.delete(http_ctx).await;
+
+            if delete_result.is_err() {
+                eprintln!("Error: Cannot delete message for board on error");
+            }
+            return;
+        }
+    }
+}
+
+async fn remove_from_board(message: Message, channel_id: u64, board_id: i64, client: tokio_postgres::Client, http_ctx: Arc<serenity::http::Http>) {
+    let message_id_int: i64 = *message.id.as_u64() as i64;
+
+    let result_mapping = client
+        .query("SELECT board_message_id FROM message_mapping WHERE message_id = $1 AND board_id = $2;", &[ &message_id_int, &board_id])
+        .await;
+
+    if result_mapping.is_err() {
+        eprintln!("Error: Fetching mapping from database");
+        return;
+    }
+
+    let mapping = result_mapping.unwrap();
+    let board_message_id: u64 = mapping[0].get::<usize, i64>(0) as u64;
+
+    let result_board_message: Result<Message, SerenityError> = http_ctx.get_message(channel_id, board_message_id).await;
+
+    if result_board_message.is_err()  {
+        eprintln!("Error: Getting board message");
+        return;
+    }
+
+    let board_message = result_board_message.unwrap();
+
+    let result_delete = board_message.delete(http_ctx).await;
+
+    if result_delete.is_err()  {
+        eprintln!("Error: Deleting board message");
+        return;
+    }
+
+    let result_db = client.execute(
+       "DELETE FROM message_mapping WHERE message_id = $1 AND board_id = $2;",
+       &[ &message_id_int, &board_id],
+    ).await;
+
+    if result_db.is_err()  {
+        eprintln!("Error: Deleting board message");
+    }
 }
 
 async fn handle_board_change(ctx: Context, reaction: Reaction, remove: bool) {
@@ -106,7 +193,7 @@ async fn handle_board_change(ctx: Context, reaction: Reaction, remove: bool) {
         .query("SELECT id, threshold, channel_id FROM boards WHERE guild_id = $1 AND emoji = $2;", &[ &guild_id_int, &emoji])
         .await.unwrap();
 
-    if(rows.len() == 0) {
+    if rows.len() == 0 {
         return;
     }
 
@@ -119,76 +206,21 @@ async fn handle_board_change(ctx: Context, reaction: Reaction, remove: bool) {
 
     let channel_id: ChannelId = ChannelId(channel_id_num);
     let message: Message = ctx.http.get_message(channel_id_num, *reaction.message_id.as_u64()).await.unwrap();
-    let mut do_i_remove = true;
 
     for reaction in &message.reactions {
         let http_ctx: Arc<Http> = ctx.borrow().clone().http;
         println!("{},{}",reaction.reaction_type, reaction.count);
 
-        if(reaction.reaction_type.unicode_eq(emoji) && reaction.count >= threshold) {
-            do_i_remove = false;
-            let message_id_int: i64 = *message.id.as_u64() as i64;
-
-            let mapping = client
-            .query("SELECT board_message_id FROM message_mapping WHERE message_id = $1 AND board_id = $2;", &[ &message_id_int, &board_id])
-            .await.unwrap();
-
-            if(mapping.len() == 0) {
-                let mut username =  message.author.tag();
-
-                let nickname = message.author_nick(&http_ctx).await;
-                if(!nickname.is_none()) {
-                    username = format!("{} ({})", nickname.unwrap(), message.author.tag());
-                }
-
-                let message = format!("**Made the board:** \n{}\n\n---\n**From:** {}", message.content, username);
-               
-                let result_msg: Result<Message, serenity::Error> = channel_id.send_message(&http_ctx, |m| {
-                    m.content(message)
-                }).await;
-
-                if(result_msg.is_err()) {
-                    println!("Error sending board message");
-                    return;
-                }
-
-                let board_message = result_msg.unwrap();
-                let board_message_id_int: i64 = *board_message.id.as_u64() as i64;
-
-                
-                let result_db = client.execute(
-                    "INSERT INTO message_mapping (message_id, board_message_id, board_id) VALUES ($1, $2, $3);",
-                    &[&message_id_int, &board_message_id_int, &board_id],
-                ).await;
-
-                if(result_db.is_err()) {
-                    board_message.delete(http_ctx);
-                    println!("Error storing in database!");
-                    return;
-                }
-            }
-
+        if reaction.reaction_type.unicode_eq(emoji) && reaction.count >= threshold  {
+            add_to_board(message, channel_id, board_id, client, http_ctx).await;
             return;
         }
     }
 
-    if(do_i_remove && remove) {
-        let message_id_int: i64 = *message.id.as_u64() as i64;
-
-        let mapping = client
-        .query("SELECT board_message_id FROM message_mapping WHERE message_id = $1 AND board_id = $2;", &[ &message_id_int, &board_id])
-        .await.unwrap();
-
-        let board_message_id: u64 = mapping[0].get::<usize, i64>(0) as u64;
-
-        let board_message: Message = ctx.http.get_message(channel_id_num, board_message_id).await.unwrap();
-        board_message.delete(ctx.http).await.unwrap();
-
-        let result_db = client.execute(
-           "DELETE FROM message_mapping WHERE message_id = $1 AND board_id = $2;",
-           &[ &message_id_int, &board_id],
-        ).await;
+    if remove  {
+       remove_from_board(message, channel_id_num, board_id, client, ctx.http).await;
     }
+
 }
 
 #[async_trait]
@@ -238,7 +270,7 @@ impl EventHandler for Bot {
         if let Interaction::ApplicationCommand(command) = interaction {
             let response_content = match command.data.name.as_str() {
                 "createboard" => create_board(&command).await,
-                command => "Error".to_owned(),
+                _command => "Error".to_owned(),
             };
 
             let create_interaction_response =
