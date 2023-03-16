@@ -25,7 +25,7 @@ async fn main() {
         .expect("Error creating client");
 
     if let Err(why) = client.start().await {
-        println!("An error occurred while running the client: {:?}", why);
+        eprintln!("An error occurred while running the client: {:?}", why);
     }
 }
 
@@ -115,7 +115,7 @@ async fn add_to_board(message: Message, channel_id: ChannelId, board_id: i64, cl
         }).await;
 
         if result_msg.is_err() {
-            println!("Error sending board message");
+            eprintln!("Error sending board message");
             return;
         }
 
@@ -197,19 +197,14 @@ async fn handle_board_change(ctx: Context, reaction: Reaction, remove: bool) {
         return;
     }
 
-    // And then check that we got back the same string we sent over.
     let board_id: i64 = rows[0].get(0);
     let threshold: u64 = rows[0].get::<usize, i64>(1) as u64;
     let channel_id_num: u64 = rows[0].get::<usize, i64>(2) as u64;
-
-    println!("{}, {}", threshold, channel_id_num);
-
     let channel_id: ChannelId = ChannelId(channel_id_num);
     let message: Message = ctx.http.get_message(channel_id_num, *reaction.message_id.as_u64()).await.unwrap();
 
     for reaction in &message.reactions {
         let http_ctx: Arc<Http> = ctx.borrow().clone().http;
-        println!("{},{}",reaction.reaction_type, reaction.count);
 
         if reaction.reaction_type.unicode_eq(emoji) && reaction.count >= threshold  {
             add_to_board(message, channel_id, board_id, client, http_ctx).await;
@@ -281,7 +276,7 @@ impl EventHandler for Bot {
                 });
 
             if let Err(why) = create_interaction_response.await {
-                println!("Cannot respond to slash command: {}", why);
+                eprintln!("Cannot respond to slash command: {}", why);
             }
         }
     }
