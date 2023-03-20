@@ -75,6 +75,14 @@ pub async fn create_board(command: &ApplicationCommandInteraction) -> String {
                 let guild_id_int: i64 = *guild_id.as_u64() as i64;
                 let channel_id_int: i64 = *channel.id.as_u64() as i64;
                 let channel_id_str: String = channel.id.to_string();
+
+                if emoji.contains("<") {
+                    return String::from("I can't work with non-unicode reactions yet! Sorry!");
+                }
+
+                if emojis::get(emoji).is_none() {
+                    return String::from("You seem to have passed an invalid reaction! I currently only support unicode emojis.");
+                }
                 
                 let result = client.execute(
                     "INSERT INTO boards (emoji, threshold, guild_id, channel_id) VALUES ($1, $2, $3, $4);",
@@ -108,7 +116,7 @@ async fn add_to_board(message: Message, channel_id: ChannelId, board_id: i64, cl
             username = format!("{} ({})", nickname.unwrap(), message.author.tag());
         }
 
-        let message = format!("**Made the board:** \n{}\n\n---\n**From:** {}", message.content, username);
+        let message = format!("{}\n\n---\n**From:** {}", message.content, username);
        
         let result_msg: Result<Message, serenity::Error> = channel_id.send_message(&http_ctx, |m| {
             m.content(message)
@@ -265,7 +273,7 @@ impl EventHandler for Bot {
         if let Interaction::ApplicationCommand(command) = interaction {
             let response_content = match command.data.name.as_str() {
                 "createboard" => create_board(&command).await,
-                _command => "Error".to_owned(),
+                _command => String::from("Error"),
             };
 
             let create_interaction_response =
