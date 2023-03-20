@@ -93,7 +93,7 @@ pub async fn create_board(command: &ApplicationCommandInteraction) -> String {
                     return String::from("Error creating board!");
                 }
 
-                return format!("Created! I will now post with more than {} reactions with the {} emoji, I will post it on <#{}>", threshold, emoji, channel_id_str);
+                return format!("Created! If a post gets more than {} reactions with the {} emoji, I will post it on <#{}>", threshold, emoji, channel_id_str);
             }
         }
     }
