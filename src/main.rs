@@ -101,7 +101,7 @@ pub async fn create_board(command: &ApplicationCommandInteraction) -> String {
     return "Error!".to_string();
 }
 
-async fn add_to_board(message: Message, channel_id: ChannelId, board_id: i64, client: tokio_postgres::Client, http_ctx: Arc<serenity::http::Http>) {
+async fn add_to_board(message: Message, channel_id: ChannelId, board_id: i64, client: tokio_postgres::Client, http_ctx: Arc<serenity::http::Http>, emoji: String) {
     let message_id_int: i64 = *message.id.as_u64() as i64;
 
     let mapping = client
@@ -116,7 +116,7 @@ async fn add_to_board(message: Message, channel_id: ChannelId, board_id: i64, cl
             username = format!("{} ({})", nickname.unwrap(), message.author.tag());
         }
 
-        let message = format!("{}\n\n---\n**From:** {}", message.content, username);
+        let message = format!("{}\n\n---\n**From:** {}\n---\n{}-board", message.content, username, emoji);
        
         let result_msg: Result<Message, serenity::Error> = channel_id.send_message(&http_ctx, |m| {
             m.content(message)
@@ -215,7 +215,7 @@ async fn handle_board_change(ctx: Context, reaction: Reaction, remove: bool) {
         let http_ctx: Arc<Http> = ctx.borrow().clone().http;
 
         if reaction.reaction_type.unicode_eq(emoji) && reaction.count >= threshold  {
-            add_to_board(message, channel_id, board_id, client, http_ctx).await;
+            add_to_board(message, channel_id, board_id, client, http_ctx, String::from(emoji)).await;
             return;
         }
     }
