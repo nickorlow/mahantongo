@@ -6,7 +6,7 @@ env:
 
 on:
   push:
-    branches: [ "{{_main_branchname_}}" ]
+    branches: [ "main" ]
   workflow_dispatch:
 
 jobs:
