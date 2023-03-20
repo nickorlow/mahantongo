@@ -209,7 +209,7 @@ async fn handle_board_change(ctx: Context, reaction: Reaction, remove: bool) {
     let threshold: u64 = rows[0].get::<usize, i64>(1) as u64;
     let channel_id_num: u64 = rows[0].get::<usize, i64>(2) as u64;
     let channel_id: ChannelId = ChannelId(channel_id_num);
-    let message: Message = ctx.http.get_message(channel_id_num, *reaction.message_id.as_u64()).await.unwrap();
+    let message: Message = ctx.http.get_message(*reaction.channel_id.as_u64(), *reaction.message_id.as_u64()).await.unwrap();
 
     for reaction in &message.reactions {
         let http_ctx: Arc<Http> = ctx.borrow().clone().http;
