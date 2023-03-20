@@ -116,7 +116,13 @@ async fn add_to_board(message: Message, channel_id: ChannelId, board_id: i64, cl
             username = format!("{} ({})", nickname.unwrap(), message.author.tag());
         }
 
-        let message = format!("{}\n\n---\n**From:** {}\n---\n{}-board", message.content, username, emoji);
+        let mut attachment_links = String::from("");
+
+        for attachment in message.attachments {
+            attachment_links += format!("{}\n", attachment.url).as_str();
+        }
+
+        let message = format!("{}\n{}\n---\n**From:** {}\n---\n{}-board", message.content, attachment_links, username, emoji);
        
         let result_msg: Result<Message, serenity::Error> = channel_id.send_message(&http_ctx, |m| {
             m.content(message)
