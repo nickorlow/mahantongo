@@ -116,16 +116,39 @@ async fn add_to_board(message: Message, channel_id: ChannelId, board_id: i64, cl
             username = format!("{} ({})", nickname.unwrap(), message.author.tag());
         }
 
-        let mut attachment_links = String::from("");
-
-        for attachment in message.attachments {
-            attachment_links += format!("{}\n", attachment.url).as_str();
-        }
-
-        let message = format!("{}\n{}\n---\n**From:** {}\n---\n{}-board", message.content, attachment_links, username, emoji);
-       
         let result_msg: Result<Message, serenity::Error> = channel_id.send_message(&http_ctx, |m| {
-            m.content(message)
+            m.embed(|e|  {
+                    e
+                    .colour(0x00ff00)
+                    .description(message.content)
+                    .footer(|f| {
+                        f.text(format!("{} board", emoji));
+                        f
+                    })
+                    .author(|f| {
+                        f.icon_url(message.author.avatar_url().unwrap_or_else(|| String::from("")))
+                        .name(username)
+                    });
+
+                    let mut attachment_links = String::from("");
+                    let mut added_img = false;
+
+                    for attachment in &message.attachments {
+                        if !added_img && attachment.content_type.is_some() && attachment.content_type.as_ref().unwrap().contains("image/") {
+                            e.image(attachment.url.as_str());
+                            added_img = true;
+                        }
+
+                        attachment_links += format!("{}\n", attachment.url).as_str();
+                    }
+
+                    if attachment_links != "" {
+                        e.field("Attachments", attachment_links, true);
+                    }
+
+                    e
+                }
+            )
         }).await;
 
         if result_msg.is_err() {
