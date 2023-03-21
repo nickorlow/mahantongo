@@ -1,5 +1,6 @@
 use std::borrow::Borrow;
 use std::env;
+use serenity::model::Permissions;
 use tokio_postgres::{NoTls};
 use serenity::async_trait;
 use serenity::prelude::*;
@@ -273,6 +274,7 @@ impl EventHandler for Bot {
 		{ 
 			command.name("createboard")
 			       .description("Creates a board (like Starboard)") 
+                   .default_member_permissions(Permissions::MANAGE_CHANNELS)
 			       .create_option(|option| {
 							option.name("channel")
 							      .description("The channel to post messages to")
